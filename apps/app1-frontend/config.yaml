@@ -1,0 +1,20 @@
+# Application 1 — Node.js Front-End (Docker)
+appName: app1-frontend
+pipelineType: docker
+
+dockerfile: Dockerfile
+buildContext: .
+memoryQuota: 512M
+
+docker:
+  registry: gitea.<fqdn>.
+  repository: <fqdn>/app1-frontend
+  tag: "${BUILD_NUMBER}"
+
+cf:
+  dev:
+    org: dev
+    space: app1-space
+  prod:
+    org: prod
+    space: app1-space

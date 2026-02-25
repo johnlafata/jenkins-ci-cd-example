@@ -1,0 +1,161 @@
+/**
+ * Jenkinsfile.docker — Parameterized pipeline for Docker-based applications
+ *
+ * Used by: Node.js front-ends (all apps), App 1 MS SQL database container
+ *
+ * Required parameters (passed via job config or app-specific config file):
+ *   APP_NAME        - Application name in Cloud Foundry
+ *   APP_CONFIG_DIR  - Path to app config directory (e.g., apps/app1-frontend)
+ *   CF_ORG          - Target CF org
+ *   CF_SPACE         - Target CF space
+ *   DOCKER_REGISTRY - GitEA registry URL
+ *   DOCKER_IMAGE    - Full image name (registry/repo:tag)
+ */
+
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'APP_NAME',        description: 'CF application name')
+        string(name: 'APP_CONFIG_DIR',  description: 'Path to app config directory')
+        string(name: 'CF_ORG',          description: 'Cloud Foundry org')
+        string(name: 'CF_SPACE',        description: 'Cloud Foundry space')
+        string(name: 'DOCKER_REGISTRY', description: 'GitEA Docker registry URL')
+        string(name: 'DOCKER_IMAGE',    description: 'Full Docker image path including tag')
+        choice(name: 'ENVIRONMENT',     choices: ['dev', 'prod'], description: 'Target environment')
+    }
+
+    environment {
+        CF_CREDS        = credentials('cf-api-credentials')
+        DOCKER_CREDS    = credentials('gitea-docker-registry')
+        CF_API_ENDPOINT = credentials('cf-api-endpoint')
+        TFS_CREDS       = credentials('tfs-pat')
+    }
+
+    options {
+        timestamps()
+        timeout(time: 30, unit: 'MINUTES')
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+    }
+
+    triggers {
+        // TFS service hook triggers this job via webhook
+        GenericTrigger(
+            genericVariables: [
+                [key: 'TFS_BRANCH', value: '$.resource.refUpdates[0].name']
+            ],
+            causeString: 'Triggered by TFS push to $TFS_BRANCH',
+            token: "${APP_NAME}-docker-trigger",
+            printContributedVariables: true,
+            printPostContent: false
+        )
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+                echo "Building ${params.APP_NAME} for ${params.ENVIRONMENT}"
+            }
+        }
+
+        stage('Load App Config') {
+            steps {
+                script {
+                    def config = readYaml file: "${params.APP_CONFIG_DIR}/config.yaml"
+                    env.DOCKERFILE_PATH = config.dockerfile ?: 'Dockerfile'
+                    env.BUILD_CONTEXT   = config.buildContext ?: '.'
+                    env.CF_MANIFEST     = "${params.APP_CONFIG_DIR}/manifest-${params.ENVIRONMENT}.yml"
+                    env.MEMORY_QUOTA    = config.memoryQuota ?: '1G'
+                    echo "Loaded config: dockerfile=${env.DOCKERFILE_PATH}, manifest=${env.CF_MANIFEST}"
+                }
+            }
+        }
+
+        stage('Docker Build') {
+            steps {
+                script {
+                    docker.build(
+                        "${params.DOCKER_IMAGE}",
+                        "-f ${env.DOCKERFILE_PATH} ${env.BUILD_CONTEXT}"
+                    )
+                }
+            }
+        }
+
+        stage('Image Security Scan') {
+            steps {
+                echo "Running container image security scan..."
+                // TODO: Integrate your preferred scanner (Trivy, Snyk, etc.)
+                sh """
+                    echo "Scanning image: ${params.DOCKER_IMAGE}"
+                    # trivy image --exit-code 1 --severity HIGH,CRITICAL ${params.DOCKER_IMAGE}
+                """
+            }
+        }
+
+        stage('Push to GitEA Registry') {
+            steps {
+                script {
+                    docker.withRegistry("https://${params.DOCKER_REGISTRY}", 'gitea-docker-registry') {
+                        docker.image("${params.DOCKER_IMAGE}").push()
+                        docker.image("${params.DOCKER_IMAGE}").push('latest')
+                    }
+                }
+            }
+        }
+
+        stage('Deploy to Cloud Foundry') {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'cf-api-credentials',
+                        usernameVariable: 'CF_USER',
+                        passwordVariable: 'CF_PASS'
+                    )
+                ]) {
+                    sh """
+                        cf api ${CF_API_ENDPOINT} --skip-ssl-validation
+                        cf auth ${CF_USER} ${CF_PASS}
+                        cf target -o ${params.CF_ORG} -s ${params.CF_SPACE}
+                    """
+
+                    // Push as Docker image
+                    sh """
+                        cf push ${params.APP_NAME} \
+                            --docker-image ${params.DOCKER_REGISTRY}/${params.DOCKER_IMAGE} \
+                            --docker-username ${DOCKER_CREDS_USR} \
+                            -f ${env.CF_MANIFEST}
+                    """
+                }
+            }
+        }
+
+        stage('Smoke Test') {
+            steps {
+                script {
+                    def appUrl = sh(
+                        script: "cf app ${params.APP_NAME} | grep routes | awk '{print \$2}'",
+                        returnStdout: true
+                    ).trim()
+                    sh "curl -sf --max-time 30 https://${appUrl}/health || exit 1"
+                    echo "Smoke test passed for ${params.APP_NAME} at ${appUrl}"
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Successfully deployed ${params.APP_NAME} to ${params.CF_ORG}/${params.CF_SPACE}"
+        }
+        failure {
+            echo "Deployment failed for ${params.APP_NAME}"
+            // TODO: Add notification (email, Slack, Teams)
+        }
+        always {
+            cleanWs()
+        }
+    }
+}

@@ -1,0 +1,13 @@
+---
+applications:
+  - name: app1-frontend
+    memory: 512M
+    instances: 1
+    docker:
+      image: gitea.<fqdn>/app1-frontend:latest
+    routes:
+      - route: app1-frontend-dev.apps.<fqdn>.
+    env:
+      NODE_ENV: development
+      API_BASE_URL: https://app1-api-dev.apps.<fqdn>.
+    services: []

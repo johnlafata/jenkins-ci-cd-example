@@ -1,0 +1,16 @@
+# Application 2 — .NET Core API (Buildpack)
+appName: app2-api
+pipelineType: buildpack
+
+dotnetVersion: "8.0"
+projectFile: src/App2.Api/App2.Api.csproj
+publishDir: published_app
+buildpack: dotnet_core_buildpack
+
+cf:
+  dev:
+    org: dev
+    space: app2-space
+  prod:
+    org: prod
+    space: app2-space

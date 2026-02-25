@@ -1,0 +1,13 @@
+---
+applications:
+  - name: app2-frontend
+    memory: 512M
+    instances: 2
+    docker:
+      image: gitea.<fqdn>/app2-frontend:latest
+    routes:
+      - route: app2-frontend.apps.<fqdn>.
+    env:
+      NODE_ENV: production
+      API_BASE_URL: https://app2-api.apps.<fqdn>.
+    services: []

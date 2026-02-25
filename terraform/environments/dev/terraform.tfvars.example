@@ -1,0 +1,18 @@
+# Dev Environment Variables — Copy to terraform.tfvars and fill in values
+# DO NOT commit terraform.tfvars to source control
+
+cf_api_endpoint      = "https://api.sys.<fqdn>."
+cf_username          = "admin"
+cf_password          = "CHANGE_ME"
+
+isolation_segment_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+sql_server_cidr      = "10.0.0.0/24"
+
+developers = [
+  "developer1@<fqdn>",
+  "developer2@<fqdn>",
+]
+
+managers = [
+  "devops-lead@<fqdn>",
+]

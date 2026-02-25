@@ -1,0 +1,166 @@
+# Jenkins Configuration as Code (JCasC)
+# Place in $JENKINS_HOME/casc_configs/ or set CASC_JENKINS_CONFIG env var
+#
+# Documentation: https://plugins.jenkins.io/configuration-as-code/
+
+jenkins:
+  systemMessage: "ExampleCI/CD — Managed by Configuration as Code"
+  numExecutors: 2
+  mode: NORMAL
+  labelString: "master"
+
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: "${JENKINS_ADMIN_USER:-admin}"
+          password: "${JENKINS_ADMIN_PASS:-changeme}"
+
+  authorizationStrategy:
+    roleBased:
+      roles:
+        global:
+          - name: "admin"
+            permissions:
+              - "Overall/Administer"
+            entries:
+              - user: "${JENKINS_ADMIN_USER:-admin}"
+          - name: "developer"
+            permissions:
+              - "Job/Build"
+              - "Job/Read"
+              - "Job/Workspace"
+              - "Overall/Read"
+
+  globalNodeProperties:
+    - envVars:
+        env:
+          - key: "CF_API_ENDPOINT"
+            value: "${CF_API_ENDPOINT}"
+          - key: "GITEA_REGISTRY"
+            value: "${GITEA_REGISTRY:-gitea.<fqdn>.}"
+
+# --- Tool Installations ---
+tool:
+  git:
+    installations:
+      - name: "Default"
+        home: "git"
+
+  dotNetSdk:
+    installations:
+      - name: "dotnet-8.0"
+        properties:
+          - installSource:
+              installers:
+                - dotNetSdkInstaller:
+                    version: "8.0"
+
+# --- Credentials ---
+credentials:
+  system:
+    domainCredentials:
+      - credentials:
+          # Cloud Foundry API credentials
+          - usernamePassword:
+              scope: GLOBAL
+              id: "cf-api-credentials"
+              username: "${CF_USERNAME}"
+              password: "${CF_PASSWORD}"
+              description: "Cloud Foundry API credentials"
+
+          # GitEA Docker registry
+          - usernamePassword:
+              scope: GLOBAL
+              id: "gitea-docker-registry"
+              username: "${GITEA_USER}"
+              password: "${GITEA_TOKEN}"
+              description: "GitEA Docker registry credentials"
+
+          # TFS Personal Access Token
+          - string:
+              scope: GLOBAL
+              id: "tfs-pat"
+              secret: "${TFS_PAT}"
+              description: "TFS Personal Access Token"
+
+          # CF API endpoint (stored as secret text)
+          - string:
+              scope: GLOBAL
+              id: "cf-api-endpoint"
+              secret: "${CF_API_ENDPOINT}"
+              description: "Cloud Foundry API endpoint URL"
+
+# --- Shared Library ---
+unclassified:
+  globalLibraries:
+    libraries:
+      - name: "shared-libary"
+        defaultVersion: "main"
+        retriever:
+          modernSCM:
+            scm:
+              git:
+                remote: "${SHARED_LIBRARY_REPO}"
+                credentialsId: "tfs-pat"
+
+  # Pipeline configuration
+  location:
+    url: "${JENKINS_URL:-http://localhost:8080/}"
+    adminAddress: "devops@<fqdn>"
+
+# --- Job DSL Seed (optional) ---
+jobs:
+  # Docker pipeline jobs
+  - script: |
+      ['app1-frontend', 'app1-db', 'app2-frontend', 'app3-frontend'].each { appName ->
+        pipelineJob("docker-${appName}") {
+          description("Docker pipeline for ${appName}")
+          definition {
+            cpsScm {
+              scm {
+                git {
+                  remote {
+                    url('${CICD_CONFIG_REPO}')
+                    credentials('tfs-pat')
+                  }
+                  branches('*/main')
+                }
+              }
+              scriptPath('pipelines/Jenkinsfile.docker')
+            }
+          }
+          parameters {
+            stringParam('APP_NAME', appName, 'Application name')
+            stringParam('APP_CONFIG_DIR', "apps/${appName}", 'Config directory')
+            choiceParam('ENVIRONMENT', ['dev', 'prod'], 'Target environment')
+          }
+        }
+      }
+
+  # Buildpack pipeline jobs
+  - script: |
+      ['app1-api', 'app2-api', 'app3-api'].each { appName ->
+        pipelineJob("buildpack-${appName}") {
+          description("Buildpack pipeline for ${appName}")
+          definition {
+            cpsScm {
+              scm {
+                git {
+                  remote {
+                    url('${CICD_CONFIG_REPO}')
+                    credentials('tfs-pat')
+                  }
+                  branches('*/main')
+                }
+              }
+              scriptPath('pipelines/Jenkinsfile.buildpack')
+            }
+          }
+          parameters {
+            stringParam('APP_NAME', appName, 'Application name')
+            stringParam('APP_CONFIG_DIR', "apps/${appName}", 'Config directory')
+            choiceParam('ENVIRONMENT', ['dev', 'prod'], 'Target environment')
+          }
+        }
+      }

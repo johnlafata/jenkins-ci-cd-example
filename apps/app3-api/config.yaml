@@ -1,0 +1,17 @@
+# Application 3 — .NET Core API (Buildpack)
+# NOTE: Deployed to isolation segment space with custom ASG (port 1433 allowed)
+appName: app3-api
+pipelineType: buildpack
+
+dotnetVersion: "8.0"
+projectFile: src/App3.Api/App3.Api.csproj
+publishDir: published_app
+buildpack: dotnet_core_buildpack
+
+cf:
+  dev:
+    org: dev
+    space: app3-space  # Isolation segment space
+  prod:
+    org: prod
+    space: app3-space  # Isolation segment space

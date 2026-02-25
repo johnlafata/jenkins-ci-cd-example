@@ -1,0 +1,21 @@
+# Application 3 — Node.js Front-End (Docker)
+# NOTE: Deployed to isolation segment space with custom ASG (port 1433 allowed)
+appName: app3-frontend
+pipelineType: docker
+
+dockerfile: Dockerfile
+buildContext: .
+memoryQuota: 512M
+
+docker:
+  registry: gitea.<fqdn>.
+  repository: <fqdn>/app3-frontend
+  tag: "${BUILD_NUMBER}"
+
+cf:
+  dev:
+    org: dev
+    space: app3-space  # Isolation segment space
+  prod:
+    org: prod
+    space: app3-space  # Isolation segment space

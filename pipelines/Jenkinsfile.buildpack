@@ -1,0 +1,184 @@
+/**
+ * Jenkinsfile.buildpack — Parameterized pipeline for .NET Core API applications
+ *
+ * Used by: .NET Core API tier for all three applications
+ *
+ * Required parameters (passed via job config or app-specific config file):
+ *   APP_NAME        - Application name in Cloud Foundry
+ *   APP_CONFIG_DIR  - Path to app config directory (e.g., apps/app1-api)
+ *   CF_ORG          - Target CF org
+ *   CF_SPACE         - Target CF space
+ *   DOTNET_PROJECT  - Path to the .NET project or solution file
+ */
+
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'APP_NAME',        description: 'CF application name')
+        string(name: 'APP_CONFIG_DIR',  description: 'Path to app config directory')
+        string(name: 'CF_ORG',          description: 'Cloud Foundry org')
+        string(name: 'CF_SPACE',        description: 'Cloud Foundry space')
+        string(name: 'DOTNET_PROJECT',  description: 'Path to .NET project/solution file')
+        choice(name: 'ENVIRONMENT',     choices: ['dev', 'prod'], description: 'Target environment')
+    }
+
+    environment {
+        CF_CREDS        = credentials('cf-api-credentials')
+        CF_API_ENDPOINT = credentials('cf-api-endpoint')
+        TFS_CREDS       = credentials('tfs-pat')
+        DOTNET_CLI_TELEMETRY_OPTOUT = '1'
+    }
+
+    options {
+        timestamps()
+        timeout(time: 30, unit: 'MINUTES')
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+    }
+
+    triggers {
+        GenericTrigger(
+            genericVariables: [
+                [key: 'TFS_BRANCH', value: '$.resource.refUpdates[0].name']
+            ],
+            causeString: 'Triggered by TFS push to $TFS_BRANCH',
+            token: "${APP_NAME}-buildpack-trigger",
+            printContributedVariables: true,
+            printPostContent: false
+        )
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+                echo "Building ${params.APP_NAME} for ${params.ENVIRONMENT}"
+            }
+        }
+
+        stage('Load App Config') {
+            steps {
+                script {
+                    def config = readYaml file: "${params.APP_CONFIG_DIR}/config.yaml"
+                    env.DOTNET_VERSION  = config.dotnetVersion ?: '8.0'
+                    env.PUBLISH_DIR     = config.publishDir ?: 'published_app'
+                    env.CF_MANIFEST     = "${params.APP_CONFIG_DIR}/manifest-${params.ENVIRONMENT}.yml"
+                    env.CF_BUILDPACK    = config.buildpack ?: 'dotnet_core_buildpack'
+                    echo "Loaded config: dotnet=${env.DOTNET_VERSION}, manifest=${env.CF_MANIFEST}"
+                }
+            }
+        }
+
+        stage('Restore') {
+            steps {
+                sh "dotnet restore ${params.DOTNET_PROJECT}"
+            }
+        }
+
+        stage('Build') {
+            steps {
+                sh "dotnet build ${params.DOTNET_PROJECT} --no-restore --configuration Release"
+            }
+        }
+
+        stage('Test') {
+            steps {
+                sh "dotnet test ${params.DOTNET_PROJECT} --no-build --configuration Release --logger trx"
+            }
+            post {
+                always {
+                    // Publish test results if mstest plugin is available
+                    step([$class: 'MSTestPublisher', testResultsFile: '**/*.trx', failOnError: false])
+                }
+            }
+        }
+
+        stage('Code Security Scan') {
+            steps {
+                echo "Running code security scan..."
+                // TODO: Integrate your preferred SAST tool
+                sh """
+                    echo "Scanning project: ${params.DOTNET_PROJECT}"
+                    # dotnet tool run security-scan ${params.DOTNET_PROJECT}
+                """
+            }
+        }
+
+        stage('Publish') {
+            steps {
+                sh """
+                    dotnet publish ${params.DOTNET_PROJECT} \
+                        --configuration Release \
+                        --no-build \
+                        --output ${env.PUBLISH_DIR}
+                """
+                archiveArtifacts artifacts: "${env.PUBLISH_DIR}/**", fingerprint: true
+            }
+        }
+
+        stage('Push Artifact to GitEA') {
+            steps {
+                echo "Archiving build artifacts to GitEA..."
+                // TODO: Push published artifacts to GitEA release or package registry
+                sh """
+                    echo "Artifact directory: ${env.PUBLISH_DIR}"
+                    # tar czf ${params.APP_NAME}-${BUILD_NUMBER}.tar.gz -C ${env.PUBLISH_DIR} .
+                    # curl -u \$GITEA_USER:\$GITEA_TOKEN -X POST <gitea-packages-url> ...
+                """
+            }
+        }
+
+        stage('Deploy to Cloud Foundry') {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'cf-api-credentials',
+                        usernameVariable: 'CF_USER',
+                        passwordVariable: 'CF_PASS'
+                    )
+                ]) {
+                    sh """
+                        cf api ${CF_API_ENDPOINT} --skip-ssl-validation
+                        cf auth ${CF_USER} ${CF_PASS}
+                        cf target -o ${params.CF_ORG} -s ${params.CF_SPACE}
+                    """
+
+                    // Push with buildpack from published directory
+                    sh """
+                        cf push ${params.APP_NAME} \
+                            -p ${env.PUBLISH_DIR} \
+                            -b ${env.CF_BUILDPACK} \
+                            -f ${env.CF_MANIFEST}
+                    """
+                }
+            }
+        }
+
+        stage('Smoke Test') {
+            steps {
+                script {
+                    def appUrl = sh(
+                        script: "cf app ${params.APP_NAME} | grep routes | awk '{print \$2}'",
+                        returnStdout: true
+                    ).trim()
+                    sh "curl -sf --max-time 30 https://${appUrl}/health || exit 1"
+                    echo "Smoke test passed for ${params.APP_NAME} at ${appUrl}"
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Successfully deployed ${params.APP_NAME} to ${params.CF_ORG}/${params.CF_SPACE}"
+        }
+        failure {
+            echo "Deployment failed for ${params.APP_NAME}"
+            // TODO: Add notification (email, Slack, Teams)
+        }
+        always {
+            cleanWs()
+        }
+    }
+}

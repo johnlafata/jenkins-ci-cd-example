@@ -1,0 +1,20 @@
+# Application 1 — MS SQL Database (Docker, On-Platform)
+appName: app1-db
+pipelineType: docker
+
+dockerfile: Dockerfile
+buildContext: .
+memoryQuota: 2G  # Elevated quota for on-platform MS SQL
+
+docker:
+  registry: gitea.<fqdn>.
+  repository: <fqdn>/app1-mssql
+  tag: "${BUILD_NUMBER}"
+
+cf:
+  dev:
+    org: dev
+    space: app1-space
+  prod:
+    org: prod
+    space: app1-space

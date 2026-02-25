@@ -1,0 +1,13 @@
+---
+applications:
+  - name: app3-frontend
+    memory: 512M
+    instances: 2
+    docker:
+      image: gitea.<fqdn>/app3-frontend:latest
+    routes:
+      - route: app3-frontend.apps.<fqdn>.
+    env:
+      NODE_ENV: production
+      API_BASE_URL: https://app3-api.apps.<fqdn>.
+    services: []

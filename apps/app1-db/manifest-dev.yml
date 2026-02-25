@@ -1,0 +1,15 @@
+---
+applications:
+  - name: app1-db
+    memory: 2G
+    disk_quota: 4G
+    instances: 1
+    docker:
+      image: gitea.<fqdn>/app1-mssql:latest
+    routes:
+      - route: app1-db-dev.apps.internal
+    env:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+    services:
+      - app1-smb-volume

@@ -1,0 +1,15 @@
+---
+applications:
+  - name: app1-api
+    memory: 512M
+    instances: 1
+    buildpacks:
+      - dotnet_core_buildpack
+    path: published_app
+    routes:
+      - route: app1-api-dev.apps.<fqdn>.
+    env:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__DefaultConnection: "{{app1-db-credentials}}"
+    services:
+      - app1-db-credentials
